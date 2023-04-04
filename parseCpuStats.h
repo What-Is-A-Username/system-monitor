@@ -15,31 +15,49 @@
 
 #include "stringUtils.h"
 
+#ifndef FD_WRITE
+#define FD_WRITE 1
+#endif
+
+#ifndef FD_READ
+#define FD_READ 0
+#endif
+
+/**
+ * Start flag for cpu stats to be calculated
+ */
+#define CPU_START_FLAG 2
+
+/**
+ * Flag to identify output data as CPU related
+*/
+#define CPU_DATA_ID 2
+
 /**
  * Max length of string readable from /proc/cpuinfo
-*/
+ */
 #define CPUINFO_LINE_LENGTH 256
 /**
  * Max number of processors to check for
-*/
+ */
 #define MAX_PROCESSORS 256
 /**
  * Size of a single gigabyte in bytes (1024 ^ 3)
-*/
+ */
 #define GIGABYTE_BYTE_SIZE 1073741824
 /**
  * Max length of output string dedicated for displaying the bars in the graphical representation of CPU usage
-*/
+ */
 #define GRAPHICS_MAX_CPU_BAR_COUNT 100
 /**
  * Max length of output string dedicated for displaying the numbers in the graphical representation of CPU usage
-*/
+ */
 #define GRAPHICS_MAX_CPU_NUM_COUNT 32
 
 /**
  * Representation of a single data point of CPU usage, as set by recordCpuStats()
-*/
-struct cpuDataSample
+ */
+typedef struct cpuDataSample
 {
     long user;
     long nice;
@@ -51,7 +69,7 @@ struct cpuDataSample
     long steal;
     long guest;
     long guest_nice;
-};
+} CpuDataSample;
 
 /**
  * Retrieve the number of processors and cores on the machine while considering hyperthreading.
@@ -59,7 +77,7 @@ struct cpuDataSample
  * @param processorCount Pointer to int where the number of processors will be stored
  * @param coreCount Pointer to int where the number of cores will be stored
  * @returns 0 if operation successful, 1 otherwise
-*/
+ */
 int getCpuCounts(int *processorCount, int *coreCount)
 {
     FILE *cpuinfodata = fopen("/proc/cpuinfo", "r");
@@ -109,7 +127,7 @@ int getCpuCounts(int *processorCount, int *coreCount)
  * Record a data point for CPU utilization by reading from /proc/stat, and store the data in a struct.
  * @param cpuHistoryRow A pointer to a cpuDataSample struct used to store the parsed values
  * @returns 1 if operation was successful, 0 otherwise
-*/
+ */
 int recordCpuStats(struct cpuDataSample *cpuHistoryRow)
 {
     char totalLine[CPUINFO_LINE_LENGTH];
@@ -182,7 +200,7 @@ int recordCpuStats(struct cpuDataSample *cpuHistoryRow)
  * @param previous Pointer to data point taken first.
  * @param current Pointer to data point taken second.
  * @returns Percentage CPU utilization, with 100 representing 100%.
-*/
+ */
 float calculateCpuUsage(struct cpuDataSample *previous, struct cpuDataSample *current)
 {
     // calculate the cpu change attributed to idle
@@ -207,7 +225,7 @@ float calculateCpuUsage(struct cpuDataSample *previous, struct cpuDataSample *cu
  * The display begins with a [ character, followed by a number of | characters proportional to the CPU utilization level
  * @param cpuUsage The value of CPU utilization to be displayed. 100 = 100%.
  * @return A string displaying the CPU usage as a graphical display.
-*/
+ */
 char *renderCPUUsage(float cpuUsage)
 {
     char *deltaChange = (char *)malloc((GRAPHICS_MAX_CPU_BAR_COUNT + GRAPHICS_MAX_CPU_NUM_COUNT) * sizeof(char));
@@ -232,6 +250,134 @@ char *renderCPUUsage(float cpuUsage)
     strncat(deltaChange, deltaNum, GRAPHICS_MAX_CPU_NUM_COUNT);
 
     return deltaChange;
+}
+
+void displayCpu(bool showGraphics, int writeToChildFds[2], int readFromChildFds[2], int incomingDataPipe[2])
+{
+    CpuDataSample previous, current;
+
+    CpuDataSample first;
+    first.guest = 0;
+    first.guest_nice = 0;
+    first.idle = 0;
+    first.iowait = 0;
+    first.irq = 0;
+    first.nice = 0;
+    first.softirq = 0;
+    first.steal = 0;
+    first.system = 0;
+    first.user = 0;
+
+    char averageUseOutputString[4096], outputString[4096];
+    int parentInfo, thisSample;
+    float cpuHistoryPrev, cpuHistoryCurr;
+
+    while (true)
+    {
+        // get an instruction from the parent
+        read(writeToChildFds[FD_READ], &parentInfo, sizeof(int));
+        if (parentInfo != CPU_START_FLAG) {
+            // TODO: Remove before submitting
+            printf("CPU process ended.\n");
+            break;
+        }
+
+        // get the iteration number
+        read(writeToChildFds[FD_READ], &thisSample, sizeof(int));
+
+        if (thisSample > 0) {
+            read(writeToChildFds[FD_READ], &cpuHistoryPrev, sizeof(float));
+            read(writeToChildFds[FD_READ], &previous, sizeof(CpuDataSample));
+        }
+
+        // Total number of processors on the machine
+        int processorCount = 0;
+        // Total number of cores across all processors on the machine
+        int coreCount = 0;
+        if (getCpuCounts(&processorCount, &coreCount) != 0)
+        {
+            exit(1);
+        }
+
+        // sample the cpu utilization
+        if (recordCpuStats(&current) != 0)
+        {
+            exit(1);
+        }
+
+        // compute average since start
+        float averageCpuUsage = calculateCpuUsage(&first, &current);
+        snprintf(averageUseOutputString, 4096, "\tAverage Usage = %.4f%%\n", averageCpuUsage);
+
+        // calculate the cpu utilization for the current sample
+        // calculate the unused cpu time
+        cpuHistoryCurr = calculateCpuUsage(&previous, &current);
+
+        if (thisSample == 0)
+        {
+            if (showGraphics)
+            {
+                char *cpuGraphics = renderCPUUsage(cpuHistoryCurr);
+                // print only the % usage if this is the first sample
+                snprintf(outputString, 4096, "%.2f%% (0.00) \t%s\n", cpuHistoryCurr, cpuGraphics);
+                free(cpuGraphics);
+            }
+            else
+            {
+                snprintf(outputString, 4096, "%.2f%% (0.00)\n", cpuHistoryCurr);
+            }
+        }
+        else if (thisSample > 0)
+        {
+            // print the change in cpu % usage from the previous sample
+            float absChange = cpuHistoryCurr - cpuHistoryPrev;
+            if (showGraphics)
+            {
+                char *cpuGraphics = renderCPUUsage(cpuHistoryCurr);
+                snprintf(outputString, 4096, "%.2f%% (%.2f) \t%s\n", cpuHistoryCurr, absChange, cpuGraphics);
+                free(cpuGraphics);
+            }
+            else
+            {
+                snprintf(outputString, 4096, "%.2f%% (%.2f)\n", cpuHistoryCurr, absChange);
+            }
+        }
+
+        if (thisSample == 0)  // if this was first sample, save it to calculate average
+        {
+            first.guest = current.guest;
+            first.guest_nice = current.guest_nice;
+            first.idle = current.idle;
+            first.iowait = current.iowait;
+            first.irq = current.irq;
+            first.nice = current.nice;
+            first.softirq = current.softirq;
+            first.steal = current.steal;
+            first.system = current.system;
+            first.user = current.user;
+        }
+
+        // send results back to parent in a pipe
+        write(readFromChildFds[FD_WRITE], &processorCount, sizeof(int));
+        write(readFromChildFds[FD_WRITE], &coreCount, sizeof(int));
+        write(readFromChildFds[FD_WRITE], &current, sizeof(CpuDataSample));
+        
+        int outLen = strlen(averageUseOutputString);
+        write(readFromChildFds[FD_WRITE], &outLen, sizeof(int)); 
+        write(readFromChildFds[FD_WRITE], averageUseOutputString, sizeof(char) * (outLen + 1));
+        outLen = strlen(outputString);
+        write(readFromChildFds[FD_WRITE], &outLen, sizeof(int)); 
+        write(readFromChildFds[FD_WRITE], outputString, sizeof(char) * (outLen + 1));
+    
+        // printf("Notifying parent cpu");
+        int temp = CPU_DATA_ID; 
+        write(incomingDataPipe[FD_WRITE], &temp, sizeof(int)); // notify parent that there is cpu data
+    }
+    close(readFromChildFds[FD_READ]);
+    close(readFromChildFds[FD_WRITE]);
+    close(writeToChildFds[FD_READ]);
+    close(writeToChildFds[FD_WRITE]);
+    exit(0);
 }
 
 #endif

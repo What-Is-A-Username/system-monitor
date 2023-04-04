@@ -18,21 +18,38 @@
 #define GRAPHICS_MAX_NUM_COUNT 32
 
 /**
+ * Flag used to start memory reading
+ */
+#define MEM_START_FLAG 1
+
+/**
+ * Flag used to indicate that data came from memory process
+ */
+#define MEM_DATA_ID 1
+
+#ifndef FD_WRITE
+#define FD_WRITE 1
+#endif
+
+#ifndef FD_READ
+#define FD_READ 0
+#endif
+
+/**
  * Representation of a single data point of memory usage, as set by recordCpuStats(), as well as a string representation to be printed according to convertMemoryToString()
-*/
-struct memorySample
+ */
+typedef struct memorySample
 {
     float physUsed, physTot, virtUsed, virtTot;
     char *memoryOutput;
-    char *delta;
-};
+} MemorySample;
 
 /**
  * Generate a human readable string representation of the memory utilization at the given sample data point and store its result in the same struct.
  * @param sample A memory utilization data point.
  * @param mem_unit The size of a memory unit, as given by sysinfo.mem_unit
-*/
-void convertMemoryToString(struct memorySample *sample, unsigned int mem_unit)
+ */
+void convertMemoryToString(MemorySample *sample, unsigned int mem_unit)
 {
     // calculate the number of gigabytes
     sample->memoryOutput = (char *)malloc(sizeof(char) * 63);
@@ -44,8 +61,8 @@ void convertMemoryToString(struct memorySample *sample, unsigned int mem_unit)
  * Retrieve memory information to calculate current utilization and store the result and memory statistics.
  * @param sample Pointer to memorySample point to store the current memory utilization.
  * @returns 0 if operation was successful, 1 otherwise
-*/
-int computeMemory(struct memorySample *sample)
+ */
+int computeMemory(MemorySample *sample)
 {
     struct sysinfo sysinfoData;
     int sysinfoStatus = sysinfo(&sysinfoData);
@@ -63,7 +80,7 @@ int computeMemory(struct memorySample *sample)
         convertMemoryToString(sample, sysinfoData.mem_unit);
     }
     else if (sysinfoStatus == -1)
-    { 
+    {
         // On error
         perror("Failed to read information from sysinfo()");
         return 1;
@@ -73,8 +90,8 @@ int computeMemory(struct memorySample *sample)
 
 /**
  * Return a pointer to dynamically-allocated string representing the change in memory usage using graphical bars.
-*/
-char *calculateDelta(struct memorySample *previous, struct memorySample *current)
+ */
+char *calculateDelta(MemorySample *previous, MemorySample *current)
 {
     // allocate a string to store the result
     char *deltaChange = (char *)malloc((GRAPHICS_MAX_BAR_COUNT + GRAPHICS_MAX_NUM_COUNT) * sizeof(char));
@@ -128,19 +145,98 @@ char *calculateDelta(struct memorySample *previous, struct memorySample *current
         deltaChange[bars + 1] = '@';
         deltaChange[bars + 2] = '\0';
     }
-    else // change of zero 
+    else // change of zero
     {
         snprintf(deltaChange, GRAPHICS_MAX_BAR_COUNT, "|o 0.00 (%.2f)", current->virtUsed);
         return deltaChange;
     }
 
     char deltaNum[GRAPHICS_MAX_NUM_COUNT] = "";
-    // print the change in memory numerically 
+    // print the change in memory numerically
     snprintf(deltaNum, GRAPHICS_MAX_NUM_COUNT, " %.2f (%.2f)", delta, current->virtUsed);
 
     // add the numerical stats at the end of the graphical representation
     strncat(deltaChange, deltaNum, GRAPHICS_MAX_NUM_COUNT);
     return deltaChange;
 }
+
+/**
+ * Handle processing and printing of memory stats
+ * @param showGraphics Command line argument for whether to show memory use graphics
+ * @param writeToChildFds Pipes used to read input data from main
+ * @param readFromChildFds Pipes used to write input data to main
+ */
+void displayMemory(bool showGraphics, int writeToChildFds[2], int readFromChildFds[2], int incomingDataPipe[2])
+{
+    MemorySample current, previous;
+    char outputString[4096]; 
+    int parentInfo, thisSample;
+
+    while (true) {
+
+        // get an instruction from the parent
+        read(writeToChildFds[FD_READ], &parentInfo, sizeof(int));
+        if (parentInfo != MEM_START_FLAG) {
+            // TODO: Remove before submitting
+            printf("Memory process ended.\n");
+            break;
+        }
+
+        // get the iteration number
+        read(writeToChildFds[FD_READ], &thisSample, sizeof(int)); 
+
+        if (thisSample > 0) {
+            read(writeToChildFds[FD_READ], &previous, sizeof(MemorySample)); 
+        }
+        
+        // Retrieve memory information from sysinfo
+        // DOCS: https://man7.org/linux/man-pages/man2/sysinfo.2.html
+        if (computeMemory(&current) != 0)
+        {
+            return;
+        }
+
+        if (showGraphics)
+        {
+            // print graphical representations
+            char *memoryGraphics = NULL;
+            if (thisSample == 0)
+            {
+                // if first sample, exclude previous data
+                memoryGraphics = calculateDelta(NULL, &current);
+            }
+            else
+            {
+                // for all other samples, pass two data points
+                memoryGraphics = calculateDelta(&previous, &current);
+            }
+            if (memoryGraphics == NULL)
+            {
+                fprintf(stderr, "Errored while showing memory graphics.");
+                return;
+            }
+            snprintf(outputString, 4096, "%s \t%s\n", current.memoryOutput, memoryGraphics);
+        }
+        else
+        {
+            snprintf(outputString, 4096, "%s\n", current.memoryOutput);
+        }
+
+        // communicate results back to parent
+        write(readFromChildFds[FD_WRITE], &current, sizeof(MemorySample));
+        int outLen = strlen(outputString);
+        write(readFromChildFds[FD_WRITE], &outLen, sizeof(int)); 
+        write(readFromChildFds[FD_WRITE], outputString, sizeof(char) * (outLen + 1));
+        // printf("Notifying parent cpu");
+        int temp = MEM_DATA_ID; 
+        write(incomingDataPipe[FD_WRITE], &temp, sizeof(int)); // notify parent that memory data is available
+    }
+    close(readFromChildFds[FD_READ]);
+    close(readFromChildFds[FD_WRITE]);
+    close(writeToChildFds[FD_READ]);
+    close(writeToChildFds[FD_WRITE]);
+    exit(0);
+}
+
 
 #endif
