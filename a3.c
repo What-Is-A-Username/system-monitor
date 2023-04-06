@@ -78,14 +78,19 @@ int main(int argc, char **argv)
     // store previously calculated output
     char* memoryOutput[numSamples + 1];
     char* cpuOutput[numSamples + 1];
-    char* userInfo;
     for (int i = 0;  i <= numSamples; i++) {
         memoryOutput[i] = NULL;
         cpuOutput[i] = NULL;
     }
-    userInfo = NULL;
+    char* userInfo[MAX_USERS];
+    int numUsers = 0;
+    for (int i = 0; i < MAX_USERS; i++)
+    {
+        userInfo[i] = NULL;
+    }
     
-    int processorCount, coreCount;
+    int processorCount;
+    int coreCount;
     char* averageCpuUsage = NULL;
 
     pipe(incomingDataPipe);
@@ -142,10 +147,15 @@ int main(int argc, char **argv)
         // ensure this iteration's info is empty
         memoryOutput[thisSample] = NULL;
         cpuOutput[thisSample] = NULL;
-        if (userInfo != NULL) {
-            free(userInfo);
-            userInfo = NULL;
-        }
+        for (int i = 0; i < numUsers; i++)
+        {
+            if (userInfo[i] != NULL) {
+                free(userInfo[i]);
+                userInfo[i] = NULL;
+            }
+        }       
+        numUsers = 0;
+        
         if (averageCpuUsage != NULL) {
             free(averageCpuUsage); 
             averageCpuUsage = NULL;
@@ -207,10 +217,19 @@ int main(int argc, char **argv)
                     break;
 
                 case USER_DATA_ID:
-                    read(readFromChildFds[USER_FDS][FD_READ], &strLen, sizeof(int));
-                    userInfo = (char*)malloc(sizeof(char) * (strLen + 1)); 
-                    read(readFromChildFds[USER_FDS][FD_READ], userInfo, sizeof(char) * (strLen + 1));
-                
+                    while(read(readFromChildFds[USER_FDS][FD_READ], &strLen, sizeof(int)) > 0) {
+                        if (strLen == 0) break;
+                        if (numUsers < MAX_USERS) {
+                            userInfo[numUsers] = (char*)malloc(sizeof(char) * (strLen + 1)); 
+                            read(readFromChildFds[USER_FDS][FD_READ], userInfo[numUsers], sizeof(char) * (strLen + 1));
+                            numUsers++;
+                        } else {
+                            char* overflowBin = (char*)malloc(sizeof(char) * (strLen + 1)); 
+                            read(readFromChildFds[USER_FDS][FD_READ], overflowBin, sizeof(char) * (strLen + 1));
+                            free(overflowBin);
+                        }
+                    }
+                    
                 default:
                     break;
             }
@@ -259,7 +278,10 @@ int main(int argc, char **argv)
         if (showUser || !showSystem)
         {
             printf("### Sessions/users ###\n");
-            printf("%s", userInfo);
+            for (int i = 0; i < numUsers; i++)
+            {
+                printf("%s", userInfo[i]);
+            }
             printDivider();
         }
 
@@ -303,12 +325,17 @@ int main(int argc, char **argv)
     if (averageCpuUsage != NULL) {
         free(averageCpuUsage);
     }
+
     for (int thisSample = 0; thisSample < numSamples; thisSample++)
     {
         if (memoryOutput[thisSample] != NULL)
-        free(memoryOutput[thisSample]);
+            free(memoryOutput[thisSample]);
         if (cpuOutput[thisSample] != NULL)
             free(cpuOutput[thisSample]);
+    }
+    for (int i = 0; i < numUsers; i++) {
+        if (userInfo[i] != NULL) 
+            free(userInfo[i]);
     }
 
     // tell children to exit
@@ -317,12 +344,14 @@ int main(int argc, char **argv)
         write(writeToChildFds[i][FD_WRITE], &temp, sizeof(int));
     }
 
+    // wait on children to exit 
     for (int i = 0; i < 3; i++) {
         int status;
         pid_t w = wait(&status);
         printf("Child %d exited\n", w);
     }
 
+    // close all fds 
     for (int i = 0; i < 3; i++) {
         close(writeToChildFds[i][FD_READ]);
         close(writeToChildFds[i][FD_WRITE]);

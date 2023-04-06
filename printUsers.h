@@ -6,6 +6,7 @@
 
 #define USER_START_FLAG 3
 #define USER_DATA_ID 3
+#define MAX_USERS 512
 
 #ifndef FD_WRITE
 #define FD_WRITE 1
@@ -23,6 +24,7 @@
  */
 void printUsers(int writeToChildFds[2], int readFromChildFds[2], int incomingDataPipe[2])
 {
+    int outLen = 0;
     char outputString[4096] = "";
     int parentInfo, thisSample;
     while (true) {
@@ -45,14 +47,18 @@ void printUsers(int writeToChildFds[2], int readFromChildFds[2], int incomingDat
         {
             if (data->ut_type == USER_PROCESS)
             {
-                snprintf(outputString, 4096, "%s%s\t %s (%s)\n", outputString, data->ut_user, data->ut_line, data->ut_host);
+                snprintf(outputString, 4096, "%s\t %s (%s)\n", data->ut_user, data->ut_line, data->ut_host);
+                outLen = strlen(outputString);
+                if (outLen > 0) {
+                    write(readFromChildFds[FD_WRITE], &outLen, sizeof(int)); 
+                    write(readFromChildFds[FD_WRITE], outputString, sizeof(char) * (outLen + 1));
+                }
             }
             data = getutent();
         }
 
-        int outLen = strlen(outputString);
+        outLen = 0;
         write(readFromChildFds[FD_WRITE], &outLen, sizeof(int)); 
-        write(readFromChildFds[FD_WRITE], outputString, sizeof(char) * (outLen + 1));
 
         int temp = USER_DATA_ID; 
         write(incomingDataPipe[FD_WRITE], &temp, sizeof(int)); // notify parent that memory data is available
