@@ -74,35 +74,19 @@ int main(int argc, char **argv)
 
     // printf("Parsed arguments: --system %d --user %d --graphics %d --sequential %d numSamples %ld samplesDelay %ld\n",
     //        showSystem, showUser, showGraphics, showSequential, numSamples, sampleDelay);
-
-    // store past computed cpu utilization for each sample + initial data point
-    struct cpuDataSample cpuData[numSamples + 1];
-    float cpuHistory[numSamples];
-    for (int i = 0; i < numSamples; i++)
-    {
-        cpuHistory[i] = 0.0;
-    }
-
-    // store previously calculated memory data
-    struct memorySample memorySamples[numSamples];
+    
     // store previously calculated output
-    char* memoryOutput[numSamples];
-    char* cpuOutput[numSamples];
+    char* memoryOutput[numSamples + 1];
+    char* cpuOutput[numSamples + 1];
     char* userInfo;
-    for (int i = 0;  i < numSamples; i++) {
+    for (int i = 0;  i <= numSamples; i++) {
         memoryOutput[i] = NULL;
         cpuOutput[i] = NULL;
     }
+    userInfo = NULL;
     
     int processorCount, coreCount;
     char* averageCpuUsage = NULL;
-
-    // record initial CPU stats
-    if (recordCpuStats(&cpuData[0]) != 0)
-    {
-        return 1;
-    }
-    sleep(sampleDelay);
 
     pipe(incomingDataPipe);
 
@@ -115,7 +99,7 @@ int main(int argc, char **argv)
             close(writeToChildFds[MEM_FDS][FD_WRITE]);
             close(readFromChildFds[MEM_FDS][FD_READ]); // prevent child from reading data meant for parent
             close(incomingDataPipe[FD_READ]);
-            displayMemory(showGraphics, writeToChildFds[MEM_FDS], readFromChildFds[MEM_FDS], incomingDataPipe);
+            displayMemory(numSamples, showGraphics, writeToChildFds[MEM_FDS], readFromChildFds[MEM_FDS], incomingDataPipe);
             exit(0);
         } else {
             close(writeToChildFds[MEM_FDS][FD_READ]); 
@@ -129,7 +113,7 @@ int main(int argc, char **argv)
             close(writeToChildFds[CPU_FDS][FD_WRITE]);
             close(readFromChildFds[CPU_FDS][FD_READ]); 
             close(incomingDataPipe[FD_READ]);
-            displayCpu(showGraphics, writeToChildFds[CPU_FDS], readFromChildFds[CPU_FDS], incomingDataPipe);
+            displayCpu(numSamples, showGraphics, writeToChildFds[CPU_FDS], readFromChildFds[CPU_FDS], incomingDataPipe);
             exit(0);
         } else {
             close(writeToChildFds[CPU_FDS][FD_READ]); 
@@ -153,7 +137,7 @@ int main(int argc, char **argv)
 
     close(incomingDataPipe[FD_WRITE]);
 
-    for (int thisSample = 0; thisSample < numSamples; thisSample++)
+    for (int thisSample = 0; thisSample <= numSamples; thisSample++)
     {
         // ensure this iteration's info is empty
         memoryOutput[thisSample] = NULL;
@@ -175,25 +159,24 @@ int main(int argc, char **argv)
             int temp = MEM_START_FLAG;
             write(writeToChildFds[MEM_FDS][FD_WRITE], &temp, sizeof(int));
             write(writeToChildFds[MEM_FDS][FD_WRITE], &thisSample, sizeof(int));
-            if (thisSample > 0) {
-                write(writeToChildFds[MEM_FDS][FD_WRITE], memorySamples + thisSample - 1, sizeof(struct memorySample));
-            } 
 
             // CPU USAGE
             temp = CPU_START_FLAG;
             write(writeToChildFds[CPU_FDS][FD_WRITE], &temp, sizeof(int));
             write(writeToChildFds[CPU_FDS][FD_WRITE], &thisSample, sizeof(int));
-            if (thisSample > 0) {
-                write(writeToChildFds[CPU_FDS][FD_WRITE], cpuHistory + thisSample, sizeof(float)); // write CPU % of previous iteration
-                write(writeToChildFds[CPU_FDS][FD_WRITE], cpuData + thisSample - 1, sizeof(struct cpuDataSample));
-            }
 
             // USERS
             temp = USER_START_FLAG;
             write(writeToChildFds[USER_FDS][FD_WRITE], &temp, sizeof(int));
+            write(writeToChildFds[USER_FDS][FD_WRITE], &thisSample, sizeof(int));
         }
 
         printf("Passed data\n");
+
+        if (thisSample == 0) { // skip printing on first iteration
+            sleep(sampleDelay);
+            continue;
+        }
 
         // read output from children
         while (memoryOutput[thisSample] == NULL || cpuOutput[thisSample] == NULL || userInfo == NULL) {
@@ -203,7 +186,6 @@ int main(int argc, char **argv)
             switch (processFunction)
             {
                 case MEM_DATA_ID:
-                    read(readFromChildFds[MEM_FDS][FD_READ], memorySamples + thisSample, sizeof(MemorySample));
                     read(readFromChildFds[MEM_FDS][FD_READ], &strLen, sizeof(int));
                     memoryOutput[thisSample] = (char*)malloc(sizeof(char) * (strLen + 1)); 
                     read(readFromChildFds[MEM_FDS][FD_READ], memoryOutput[thisSample], sizeof(char) * (strLen + 1));
@@ -212,8 +194,6 @@ int main(int argc, char **argv)
                 case CPU_DATA_ID:
                     read(readFromChildFds[CPU_FDS][FD_READ], &processorCount, sizeof(int));
                     read(readFromChildFds[CPU_FDS][FD_READ], &coreCount, sizeof(int));
-
-                    read(readFromChildFds[CPU_FDS][FD_READ], cpuData + thisSample, sizeof(CpuDataSample));
 
                     // read average CPU usage line
                     read(readFromChildFds[CPU_FDS][FD_READ], &strLen, sizeof(int));
@@ -247,7 +227,7 @@ int main(int argc, char **argv)
             printf("\033[2J\033[3J\033[2J\033[H\n");
         }
 
-        printf("\n||| Sample #%d |||\n", thisSample + 1);
+        printf("\n||| Sample #%d |||\n", thisSample);
         printDivider();
         printf("Nbr of samples: %ld -- every %ld secs\n", numSamples, sampleDelay);
 
@@ -266,7 +246,7 @@ int main(int argc, char **argv)
             printf("### Memory ### (Phys.Used/Tot -- Virtual Used/Tot)\n");
         }
 
-        for (int i = 0; i < numSamples; i++) {
+        for (int i = 1; i <= numSamples; i++) {
             if (memoryOutput[i] == NULL) 
                 printf("\n");
             else
@@ -299,7 +279,7 @@ int main(int argc, char **argv)
             printf("CPU Utilization (%% Use, Relative Abs. Change)\n");
         }
 
-        for (int i = 0; i < numSamples; i++) {
+        for (int i = 1; i <= numSamples; i++) {
             if (cpuOutput[i] == NULL) 
                 printf("\n");
             else
@@ -308,12 +288,10 @@ int main(int argc, char **argv)
 
         printDivider();
 
-        printf("||| End of Sample #%d |||\n\n\n", thisSample + 1);
+        printf("||| End of Sample #%d |||\n\n\n", thisSample);
 
-        if (thisSample < numSamples - 1)
-        {
-            sleep(sampleDelay);
-        }
+        if (thisSample != numSamples)
+        sleep(sampleDelay);
     }
 
     printDivider();

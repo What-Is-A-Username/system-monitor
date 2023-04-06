@@ -16,12 +16,15 @@
 #endif
 
 /**
- * Print users and sessions with data from getutent().
-*/
+ * Handle processing and printing of connected user information.
+ * @param writeToChildFds Pipes used to read input data from main
+ * @param readFromChildFds Pipes used to write input data to main
+ * @param incomingDataPipe Pipe used to notify parent of data ready in readFromChildFds
+ */
 void printUsers(int writeToChildFds[2], int readFromChildFds[2], int incomingDataPipe[2])
 {
     char outputString[4096] = "";
-    int parentInfo;
+    int parentInfo, thisSample;
     while (true) {
 
         // get an instruction from the parent
@@ -30,6 +33,11 @@ void printUsers(int writeToChildFds[2], int readFromChildFds[2], int incomingDat
             // TODO: Remove before submitting
             printf("User process ended.\n");
             break;
+        }
+
+        read(writeToChildFds[FD_READ], &thisSample, sizeof(int));
+        if (thisSample == 0) {
+            continue;
         }
 
         struct utmp *data = getutent();

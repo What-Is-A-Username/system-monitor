@@ -252,25 +252,25 @@ char *renderCPUUsage(float cpuUsage)
     return deltaChange;
 }
 
-void displayCpu(bool showGraphics, int writeToChildFds[2], int readFromChildFds[2], int incomingDataPipe[2])
+/**
+ * Handle processing and printing of CPU utilization stats
+ * @param numSamples The number of iterations specified by command line arguments
+ * @param showGraphics Command line argument for whether to show memory use graphics
+ * @param writeToChildFds Pipes used to read input data from main
+ * @param readFromChildFds Pipes used to write input data to main
+ * @param incomingDataPipe Pipe used to notify parent of data ready in readFromChildFds
+ */
+void displayCpu(int numSamples, bool showGraphics, int writeToChildFds[2], int readFromChildFds[2], int incomingDataPipe[2])
 {
-    CpuDataSample previous, current;
-
-    CpuDataSample first;
-    first.guest = 0;
-    first.guest_nice = 0;
-    first.idle = 0;
-    first.iowait = 0;
-    first.irq = 0;
-    first.nice = 0;
-    first.softirq = 0;
-    first.steal = 0;
-    first.system = 0;
-    first.user = 0;
+    struct cpuDataSample cpuData[numSamples + 1];
+    float cpuHistory[numSamples + 1];
+    for (int i = 0; i <= numSamples; i++)
+    {
+        cpuHistory[i] = 0.0;
+    }
 
     char averageUseOutputString[4096], outputString[4096];
     int parentInfo, thisSample;
-    float cpuHistoryPrev, cpuHistoryCurr;
 
     while (true)
     {
@@ -285,11 +285,6 @@ void displayCpu(bool showGraphics, int writeToChildFds[2], int readFromChildFds[
         // get the iteration number
         read(writeToChildFds[FD_READ], &thisSample, sizeof(int));
 
-        if (thisSample > 0) {
-            read(writeToChildFds[FD_READ], &cpuHistoryPrev, sizeof(float));
-            read(writeToChildFds[FD_READ], &previous, sizeof(CpuDataSample));
-        }
-
         // Total number of processors on the machine
         int processorCount = 0;
         // Total number of cores across all processors on the machine
@@ -300,67 +295,56 @@ void displayCpu(bool showGraphics, int writeToChildFds[2], int readFromChildFds[
         }
 
         // sample the cpu utilization
-        if (recordCpuStats(&current) != 0)
+        if (recordCpuStats(cpuData + thisSample) != 0)
         {
             exit(1);
         }
 
         // compute average since start
-        float averageCpuUsage = calculateCpuUsage(&first, &current);
+        float averageCpuUsage = calculateCpuUsage(cpuData, cpuData + thisSample);
         snprintf(averageUseOutputString, 4096, "\tAverage Usage = %.4f%%\n", averageCpuUsage);
 
         // calculate the cpu utilization for the current sample
         // calculate the unused cpu time
-        cpuHistoryCurr = calculateCpuUsage(&previous, &current);
+        if (thisSample > 0)
+        cpuHistory[thisSample] = calculateCpuUsage(cpuData + thisSample - 1, cpuData + thisSample);
 
-        if (thisSample == 0)
+        if (thisSample == 0) {
+            continue;
+        }
+        else if (thisSample == 1)
         {
             if (showGraphics)
             {
-                char *cpuGraphics = renderCPUUsage(cpuHistoryCurr);
+                char *cpuGraphics = renderCPUUsage(cpuHistory[thisSample]);
                 // print only the % usage if this is the first sample
-                snprintf(outputString, 4096, "%.2f%% (0.00) \t%s\n", cpuHistoryCurr, cpuGraphics);
+                snprintf(outputString, 4096, "%.2f%% (0.00) \t%s\n", cpuHistory[thisSample], cpuGraphics);
                 free(cpuGraphics);
             }
             else
             {
-                snprintf(outputString, 4096, "%.2f%% (0.00)\n", cpuHistoryCurr);
+                snprintf(outputString, 4096, "%.2f%% (0.00)\n", cpuHistory[thisSample - 1]);
             }
         }
-        else if (thisSample > 0)
+        else if (thisSample > 1)
         {
             // print the change in cpu % usage from the previous sample
-            float absChange = cpuHistoryCurr - cpuHistoryPrev;
+            float absChange = cpuHistory[thisSample] - cpuHistory[thisSample - 1];
             if (showGraphics)
             {
-                char *cpuGraphics = renderCPUUsage(cpuHistoryCurr);
-                snprintf(outputString, 4096, "%.2f%% (%.2f) \t%s\n", cpuHistoryCurr, absChange, cpuGraphics);
+                char *cpuGraphics = renderCPUUsage(cpuHistory[thisSample]);
+                snprintf(outputString, 4096, "%.2f%% (%.2f) \t%s\n", cpuHistory[thisSample], absChange, cpuGraphics);
                 free(cpuGraphics);
             }
             else
             {
-                snprintf(outputString, 4096, "%.2f%% (%.2f)\n", cpuHistoryCurr, absChange);
+                snprintf(outputString, 4096, "%.2f%% (%.2f)\n", cpuHistory[thisSample], absChange);
             }
-        }
-
-        if (thisSample == 0)  // if this was first sample, save it to calculate average
-        {
-            first.guest = current.guest;
-            first.guest_nice = current.guest_nice;
-            first.idle = current.idle;
-            first.iowait = current.iowait;
-            first.irq = current.irq;
-            first.nice = current.nice;
-            first.softirq = current.softirq;
-            first.steal = current.steal;
-            first.system = current.system;
-            first.user = current.user;
         }
 
         // send results back to parent in a pipe
         write(readFromChildFds[FD_WRITE], &processorCount, sizeof(int));
         write(readFromChildFds[FD_WRITE], &coreCount, sizeof(int));
-        write(readFromChildFds[FD_WRITE], &current, sizeof(CpuDataSample));
         
         int outLen = strlen(averageUseOutputString);
         write(readFromChildFds[FD_WRITE], &outLen, sizeof(int)); 
