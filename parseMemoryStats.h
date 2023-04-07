@@ -231,11 +231,14 @@ void displayMemory(int numSamples, bool showGraphics, int writeToChildFds[2], in
         // printf("Notifying parent cpu");
         int temp = MEM_DATA_ID; 
         write(incomingDataPipe[FD_WRITE], &temp, sizeof(int)); // notify parent that memory data is available
+
     }
     close(readFromChildFds[FD_READ]);
     close(readFromChildFds[FD_WRITE]);
     close(writeToChildFds[FD_READ]);
     close(writeToChildFds[FD_WRITE]);
+    close(incomingDataPipe[FD_READ]);
+    close(incomingDataPipe[FD_WRITE]);
     exit(0);
 }
 

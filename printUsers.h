@@ -27,8 +27,8 @@ void printUsers(int writeToChildFds[2], int readFromChildFds[2], int incomingDat
     int outLen = 0;
     char outputString[4096] = "";
     int parentInfo, thisSample;
-    while (true) {
 
+    while (true) {
         // get an instruction from the parent
         read(writeToChildFds[FD_READ], &parentInfo, sizeof(int));
         if (parentInfo != USER_START_FLAG) {
@@ -66,11 +66,13 @@ void printUsers(int writeToChildFds[2], int readFromChildFds[2], int incomingDat
         // close the currently open utmp file
         endutent();
     }
+    exit(0);
     close(readFromChildFds[FD_READ]);
     close(readFromChildFds[FD_WRITE]);
     close(writeToChildFds[FD_READ]);
     close(writeToChildFds[FD_WRITE]);
-    exit(0);
+    close(incomingDataPipe[FD_READ]);
+    close(incomingDataPipe[FD_WRITE]);
 }
 
 #endif

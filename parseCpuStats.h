@@ -357,11 +357,13 @@ void displayCpu(int numSamples, bool showGraphics, int writeToChildFds[2], int r
         int temp = CPU_DATA_ID; 
         write(incomingDataPipe[FD_WRITE], &temp, sizeof(int)); // notify parent that there is cpu data
     }
+    exit(0);
     close(readFromChildFds[FD_READ]);
     close(readFromChildFds[FD_WRITE]);
     close(writeToChildFds[FD_READ]);
     close(writeToChildFds[FD_WRITE]);
-    exit(0);
+    close(incomingDataPipe[FD_READ]);
+    close(incomingDataPipe[FD_WRITE]);
 }
 
 #endif
