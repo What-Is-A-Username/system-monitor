@@ -2,146 +2,18 @@
  
 This is a program written in C which summarizes the current state of the Linux system by presenting current system usage.
 
+## Approach
+
+The main process will launch three child processes, each reporting a different category of system information: CPU utilization, memory utilization, and connected users. These child processes will communicate back their findings to the parent process by using pipes.
+
 ## Installation
 
 This tool only works for Linux machines. This installation assumes that you have already installed a GNU C++ compiler.
 
 Compile the code:
 ```
-g++ a1.c -o ./systemMonitor
+g++ a1.c -o ./concurrentSystemMonitor
 ```
-
-## Quickstart
-
-Start by running the tool with default settings to verify correct installation.
-```
-./systemMonitor
-```
-
-For a detailed explanation of the output, [follow the included example](#sample-output).
-
-You can specify the number of times it samples statistics and the delay between consecutive samples. For example, we can decrease the number of samples to 4 and increase the delay to 2 seconds.
-```
-./systemMonitor 4 2
-```
-
-Additionally, we can also enable graphical representations of CPU and memory utilization.
-```
-./systemMonitor --graphics 4 2
-```
-
-We can also redirect the file to output.
-```
-./systemMonitor --graphics 4 2 --sequential > out.txt
-```
-
-The tool contains support for the following flags:
--   [`--samples`](#samples)
--   [`--tdelay`](#tdelay)
--   [`--system`](#system)
--   [`--user`](#user)
--   [`--graphics`](#graphics)
--   [`--sequential`](#sequential)
-
-## Sample Output
-
-Suppose we run `./systemMonitor --graphics 4 3`. Then a portion of the output will look something like this:
-```
-||| Sample #4 |||
----------------------------------------
-Nbr of samples: 4 -- every 3 secs
-Memory usage: 6240 kilobytes
----------------------------------------
-### Memory ### (Phys.Used/Tot -- Virtual Used/Tot)
-4.79 GB / 15.37 GB -- 4.79 GB / 16.33 GB         |o 0.00 (4.79)
-4.79 GB / 15.37 GB -- 4.79 GB / 16.33 GB         |* 0.00 (4.79)
-4.79 GB / 15.37 GB -- 4.86 GB / 16.33 GB         |###* 0.07 (4.86)
-4.79 GB / 15.37 GB -- 4.81 GB / 16.33 GB         |::@ -0.05 (4.81)
----------------------------------------
-### Sessions/users ###
-user2           pts/0 (138.67.32.222)
-user2           pts/1 (tmux(3773782).%0)
-user2           pts/1 (tmux(3773782).%1)
-user2           pts/1 (tmux(3773782).%2)
----------------------------------------
-Number of processors: 1
-Total number of cores: 4
-        Average Usage = 0.9350%
----------------------------------------
-CPU Utilization (% Use, Relative Abs. Change, % Use Graphic)
-1.49% (0.00)    [| 1.49%
-1.00% (-0.50)   [ 1.00%
-3.16% (2.16)    [||| 3.16%
-1.00% (-2.16)   [ 1.00%
----------------------------------------
-||| End of Sample #4 |||
-
-
----------------------------------------
-### System Information ###
-System Name = Linux
-Machine Name = iits-b473-50
-Version = #99-Ubuntu SMP Fri Nov 23 12:39:00 UTC 2021
-Release = 5.4.0-88-generic
-Architecture = x86_64
----------------------------------------
-```
-
-`||| Sample #4 |||` indicates the beginning of output for sample/iteration number 4.
-
-`Nbr of samples: 4 -- every 3 secs` indicates that the tool will sample statistics 4 times in total, with 3 seconds delay between samples.
-
-`Memory usage: 6240 kilobytes` indicates that the tool is currently using 6240 kilobytes of memory on the machine, as determined by `ru_maxrss` from [`getrusage(2)`](https://man7.org/linux/man-pages/man2/getrusage.2.html).
-
-```
-### Memory ### (Phys.Used/Tot -- Virtual Used/Tot)
-4.79 GB / 15.37 GB -- 4.79 GB / 16.33 GB         |o 0.00 (4.79)
-4.79 GB / 15.37 GB -- 4.79 GB / 12.33 GB         |* 0.00 (4.79)
-4.86 GB / 15.37 GB -- 4.86 GB / 12.33 GB         |###* 0.07 (4.86)
-4.81 GB / 15.37 GB -- 4.81 GB / 16.33 GB         |::@ -0.05 (4.81)
-```
-indicates the memory usage for all samples, with one row per sample. Between samples #2 and #3, virtual memory usage increased from 4.79 to 4.86. This change of +0.07 is written on the right side, along with a representation of the change graphically with `|###*`. Between samples #3 and #4, virtual memory usage decreased from 4.86 to 4.81. This change of -0.05 is reflected on the right alongside the graphical `|::@` representation. Explanation of the graphics are [later in this document](#graphics), as well as an explanation of [the memory calculation procedure](#memory-utilization-calculations).
-
-`### Sessions/users ###` indicates the section displaying all connected users and sessions, as obtained from `getutent()` from [`getutent(3)`](https://man7.org/linux/man-pages/man3/getutent.3.html). 
-
-```
-### Sessions/users ###
-user2           pts/0 (138.67.32.222)
-user2           pts/1 (tmux(3773782).%0)
-user2           pts/1 (tmux(3773782).%1)
-user2           pts/1 (tmux(3773782).%2)
-```
-indicates the currently connected users and sessions. The first column indicates names of users, and second column includes device name and remote login host name.
-
-```
-Number of processors: 1
-Total number of cores: 4
-        Average Usage = 0.9350%
-```
-indicates that the machine was surveyed to have one physical processor and four "cores". The average CPU utilization percentage, from beginning of sampling to the end, was 0.9350%.
-
-```
-CPU Utilization (% Use, Relative Abs. Change, % Use Graphic)
-1.49%           [| 1.49%
-1.00% (-0.50)   [ 1.00%
-3.16% (2.16)    [||| 3.16%
-1.00% (-2.16)   [ 1.00%
-```
-indicates the CPU utilization for all samples, with one row per sample. Between samples #1 and #2, CPU decreased from 1.49% to 1.00% (-0.50 change when rounded). The graphical representation on the right side represents the CPU utilization at each sample using a proportional number of `|` characters. Additional details of the calculation procedure is found in the [CPU utilization section](#cpu-utilization-calculation) and of the graphics in the [graphics section](#graphics).
-
-`||| End of Sample #4 |||` indicates the end of output for sample/iteration number 4.
-
-`### System Information ###` denotes the start of a summary displaying system information, which is always printed at the end of sampling. Information in this section is obtained from `uname()` in [`uname(2)`](https://man7.org/linux/man-pages/man2/uname.2.html)
-
-`System Name = Linux` shows the name of the operating system.
-
-`Machine Name = iits-b473-50` shows the machine name in its network. Behavior will depend on system and network configuration.
-
-`Version = #99-Ubuntu SMP Fri Nov 23 12:39:00 UTC 2021` shows the version of the operating system installed.
-
-`Release = 5.4.0-88-generic` shows the release of the operating system installed.
-
-`Architecture = x86_64` indicates the hardware of the machine. 
 
 ## Flags
 
@@ -154,16 +26,16 @@ This value can be set either as a named command line argument (`--name=N`, where
 Examples:
 ```
 # Set samples to 8 using a named argument
-./systemMonitor --samples=8
+./concurrentSystemMonitor --samples=8
 # Set to 8 using a positional argument
-./systemMonitor 8
+./concurrentSystemMonitor 8
 # Positional arguments can be combined with named arguments
-./systemMonitor 8 --graphics
-./systemMonitor --graphics 8
+./concurrentSystemMonitor 8 --graphics
+./concurrentSystemMonitor --graphics 8
 
 # If specified using two methods, the value appearing last is used. These commands all set samples to 5:
-./systemMonitor --samples=12 5
-./systemMonitor 11 --samples=5
+./concurrentSystemMonitor --samples=12 5
+./concurrentSystemMonitor 11 --samples=5
 ```
 
 ### `--tdelay`
@@ -175,17 +47,17 @@ This value can be set using either as a named command line argument (`--tdelay=N
 Examples:
 ```
 # Set time delay to 2 seconds using a named argument
-./systemMonitor --tdelay=2
+./concurrentSystemMonitor --tdelay=2
 # Set tdelay to 2 and samples to 1 using positional arguments
-./systemMonitor 1 2
+./concurrentSystemMonitor 1 2
 # Positional arguments can be combined with named arguments
-./systemMonitor 1 2 --graphics
-./systemMonitor 1 --graphics 2
-./systemMonitor --graphics 1 2
+./concurrentSystemMonitor 1 2 --graphics
+./concurrentSystemMonitor 1 --graphics 2
+./concurrentSystemMonitor --graphics 1 2
 
 # If specified using two methods, the value appearing last is used. These commands all set tdelay to 3:
-./systemMonitor --tdelay=2 1 3
-./systemMonitor 2 2 --samples=3
+./concurrentSystemMonitor --tdelay=2 1 3
+./concurrentSystemMonitor 2 2 --samples=3
 ```
 
 ### `--system`
@@ -217,7 +89,7 @@ The output is presented as two columns. The first column indicates names of user
 
 Example:
 ```
-./systemMonitor --user
+./concurrentSystemMonitor --user
 ```
 
 ### `--graphics`
@@ -230,7 +102,7 @@ For each CPU utilization sample, a graphical representation is added beginning w
 
 Example:
 ```
-./systemMonitor --graphics
+./concurrentSystemMonitor --graphics
 ```
 
 ### `--sequential`
@@ -243,10 +115,10 @@ This is helpful if the output is to be redirected elsewhere, such as to a file. 
 
 Example:
 ```
-./systemMonitor --sequential
+./concurrentSystemMonitor --sequential
 
 # redirect to file
-./systemMonitor --sequential > out.txt
+./concurrentSystemMonitor --sequential > out.txt
 ```
 
 ## Memory Utilization Calculations

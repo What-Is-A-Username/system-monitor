@@ -9,16 +9,16 @@
 #include <sys/wait.h>
 #include <signal.h>
 
+#include "stringUtils.h"
 #include "printUsers.h"
 #include "printSystem.h"
-#include "stringUtils.h"
 #include "parseArguments.h"
 #include "parseCpuStats.h"
 #include "parseMemoryStats.h"
 
-#define FD_READ 0
-#define FD_WRITE 1
-
+/**
+ * Used for development purposes. If set to true, output additional text.
+*/
 #define IN_DEBUG_MODE false
 
 /**
@@ -159,8 +159,9 @@ int sleepForSampleDelay(int sampleDelay, int writeToChildFds[3][2], int readFrom
         if (nanosleep(&req, &rem) == -1)
         {
             // handle when sleep interrupted by signal or error
-            if (IN_DEBUG_MODE)
+            if (IN_DEBUG_MODE) {
                 perror("nanosleep");
+            }
             // check if CALLED_TERMINATE or CALLED_CONTINUE signals pending
             sigset_t blocked;
             sigpending(&blocked);
@@ -187,7 +188,7 @@ int sleepForSampleDelay(int sampleDelay, int writeToChildFds[3][2], int readFrom
             req.tv_nsec = 0;
             req.tv_sec = 0;
         }
-        printf("Waiting another %lds, %ldns\n", req.tv_sec, req.tv_nsec);
+        // printf("Waiting another %lds, %ldns\n", req.tv_sec, req.tv_nsec);
     }
     return CALLED_CONTINUE;
 }
@@ -224,6 +225,8 @@ int main(int argc, char **argv)
     sigset_t criticalCodeBlocker;
     sigemptyset(&criticalCodeBlocker);
     sigaddset(&criticalCodeBlocker, SIGINT);
+
+    sigprocmask(SIG_BLOCK, &criticalCodeBlocker, NULL);
 
     /**
      * Show only the system usage? (--system)
@@ -313,6 +316,12 @@ int main(int argc, char **argv)
             displayMemory(numSamples, showGraphics, writeToChildFds[MEM_FDS], readFromChildFds[MEM_FDS], incomingDataPipe);
             exit(0);
         }
+        else if (memoryPid == -1) 
+        {
+            perror('fork (memory)');
+            terminateChildProcesses(writeToChildFds, readFromChildFds, incomingDataPipe);
+            exit(EXIT_FAILURE);
+        }
         else
         {
             close(writeToChildFds[MEM_FDS][FD_READ]);
@@ -330,6 +339,12 @@ int main(int argc, char **argv)
             close(incomingDataPipe[FD_READ]);
             displayCpu(numSamples, showGraphics, writeToChildFds[CPU_FDS], readFromChildFds[CPU_FDS], incomingDataPipe);
             exit(0);
+        }
+        else if (cpuPid == -1) 
+        {
+            perror('fork (CPU)');
+            terminateChildProcesses(writeToChildFds, readFromChildFds, incomingDataPipe);
+            exit(EXIT_FAILURE);
         }
         else
         {
@@ -352,6 +367,12 @@ int main(int argc, char **argv)
             printUsers(writeToChildFds[USER_FDS], readFromChildFds[USER_FDS], incomingDataPipe);
             exit(0);
         }
+        else if (userPid == -1) 
+        {
+            perror('fork (user)');
+            terminateChildProcesses(writeToChildFds, readFromChildFds, incomingDataPipe);
+            exit(EXIT_FAILURE);
+        }
         else
         {
             close(writeToChildFds[USER_FDS][FD_READ]);
@@ -362,13 +383,25 @@ int main(int argc, char **argv)
     if (signal(SIGPIPE, SIG_IGN) == SIG_ERR)
     {
         perror("Signal SIGPIPE");
+        terminateChildProcesses(writeToChildFds, readFromChildFds, incomingDataPipe);
+        exit(EXIT_FAILURE);
     }
 
     close(incomingDataPipe[FD_WRITE]);
 
+    if (sigprocmask(SIG_UNBLOCK, &criticalCodeBlocker, NULL) == -1) {
+        perror("sigprocmask");
+        terminateChildProcesses(writeToChildFds, readFromChildFds, incomingDataPipe);
+        exit(EXIT_FAILURE);
+    }
+
     for (int thisSample = 0; thisSample <= numSamples; thisSample++)
     {
-        sigprocmask(SIG_BLOCK, &criticalCodeBlocker, NULL);
+        if (sigprocmask(SIG_BLOCK, &criticalCodeBlocker, NULL) == -1) {
+            perror("sigprocmask");
+            terminateChildProcesses(writeToChildFds, readFromChildFds, incomingDataPipe);
+            exit(EXIT_FAILURE);
+        }
 
         // ensure this iteration's info is empty
         memoryOutput[thisSample] = NULL;
@@ -431,11 +464,13 @@ int main(int argc, char **argv)
         {
             int processFunction = 0, strLen = 0;
             int readInp = read(incomingDataPipe[FD_READ], &processFunction, sizeof(int));
+            int stringLenRead = 0;
             if (readInp == 0)
                 continue;
             if (readInp == -1)
             {
                 perror("read: incomingDataPipe");
+                terminateChildProcesses(writeToChildFds, readFromChildFds, incomingDataPipe);
                 return EXIT_FAILURE;
             }
             if (IN_DEBUG_MODE)
@@ -443,7 +478,10 @@ int main(int argc, char **argv)
             switch (processFunction)
             {
             case MEM_DATA_ID:
-                read(readFromChildFds[MEM_FDS][FD_READ], &strLen, sizeof(int));
+                stringLenRead = read(readFromChildFds[MEM_FDS][FD_READ], &strLen, sizeof(int));
+                if (stringLenRead <= 0) {
+                    break;
+                }
                 memoryOutput[thisSample] = (char *)malloc(sizeof(char) * (strLen + 1));
                 read(readFromChildFds[MEM_FDS][FD_READ], memoryOutput[thisSample], sizeof(char) * (strLen + 1));
                 break;
@@ -523,7 +561,11 @@ int main(int argc, char **argv)
         printf("Nbr of samples: %ld -- every %ld secs\n", numSamples, sampleDelay);
 
         struct rusage rUsageData;
-        getrusage(RUSAGE_SELF, &rUsageData);
+        if (getrusage(RUSAGE_SELF, &rUsageData) == -1) {
+            perror("getrusage");
+            terminateChildProcesses(writeToChildFds, readFromChildFds, incomingDataPipe);
+            exit(EXIT_FAILURE); 
+        }
         printf("Memory usage: %ld kilobytes\n", rUsageData.ru_maxrss);
 
         printDivider();
@@ -591,9 +633,14 @@ int main(int argc, char **argv)
         printf("||| End of Sample #%d |||\n", thisSample);
 
         // temporarily unblock SIGINT to allow interrupt during sleep
-        sigprocmask(SIG_UNBLOCK, &criticalCodeBlocker, NULL);
-        if (thisSample != numSamples)
+        if (sigprocmask(SIG_UNBLOCK, &criticalCodeBlocker, NULL) == -1) {
+            perror("sigprocmask");
+            terminateChildProcesses(writeToChildFds, readFromChildFds, incomingDataPipe);
+            exit(EXIT_FAILURE); 
+        }
+        if (thisSample != numSamples) {
             sleepForSampleDelay(sampleDelay, writeToChildFds, readFromChildFds, incomingDataPipe);
+        }
 
         printf("\n\n");
     }

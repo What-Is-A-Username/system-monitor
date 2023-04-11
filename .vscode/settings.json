@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "typeinfo": "c",
-        "environments.h": "c"
+        "environments.h": "c",
+        "string.h": "c"
     }
 }

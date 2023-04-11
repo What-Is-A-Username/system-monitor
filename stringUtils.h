@@ -1,7 +1,7 @@
 #ifndef STRING_UTILS_H
 #define STRING_UTILS_H
 
-#include <string.h>
+#include <stdbool.h>
 
 /**
  * Check if a substring exists in a string. 
@@ -9,17 +9,11 @@
  * @param needle substring to search for
  * @return true is substring needle is in haystack, false otherwise
 */
-bool startsWith(const char *haystack, const char *needle)
-{
-    return strstr(haystack, needle) == haystack;
-}
+bool startsWith(const char *haystack, const char *needle);
 
 /**
  * Print a single row of divider text to separate sections. 
 */
-void printDivider()
-{
-    printf("---------------------------------------\n");
-}
+extern void printDivider();
 
-#endif 
+#endif
